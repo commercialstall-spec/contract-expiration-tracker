@@ -138,7 +138,6 @@ function safeText(value) {
 }
 
 function render() {
-  records.sort((a,b) => a.end.localeCompare(b.end));
   const dated = records.map(r => ({...r, days:daysLeft(r.end)}));
   $("total").textContent = records.length;
   $("soon").textContent = dated.filter(r => r.days >= 0 && r.days <= 60).length;
