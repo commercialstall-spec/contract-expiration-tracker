@@ -1,0 +1,290 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#123b32">
+<title>Contract Expiration Tracker</title>
+<style>
+:root{font-family:Arial,sans-serif;color:#18342d;background:#f4f7f5}
+*{box-sizing:border-box}
+body{margin:0}
+header{background:#123b32;color:white;padding:24px 18px}
+header h1{margin:0 0 8px;font-size:24px}
+header p{margin:0;color:#d9e9df;font-size:14px}
+main{max-width:850px;margin:auto;padding:18px}
+.card{background:white;border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 2px 9px #153c3010}
+h2{font-size:18px;margin:0 0 15px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.stat{padding:13px;border-radius:10px;background:#edf4ef}
+.stat strong{display:block;font-size:25px}
+.stat span{font-size:12px}
+label{display:block;font-size:13px;font-weight:bold;margin:12px 0 6px}
+input{width:100%;padding:12px;border:1px solid #cbd7d0;border-radius:8px;font-size:16px}
+button{border:0;border-radius:8px;padding:12px 15px;font-size:15px;font-weight:bold;cursor:pointer}
+.primary{background:#176b50;color:white;width:100%;margin-top:16px}
+.secondary{background:#e7eee9;color:#18342d}
+.danger{background:#fde9e7;color:#9a3028}
+.contract{border:1px solid #e0e8e2;border-radius:10px;padding:14px;margin-top:12px}
+.contract h3{margin:0 0 7px;font-size:17px;overflow-wrap:anywhere}
+.meta{font-size:13px;color:#5c7065;line-height:1.7}
+.badge{display:inline-block;border-radius:20px;padding:5px 9px;font-size:12px;font-weight:bold;margin:5px 0}
+.green{background:#dcf6e3;color:#176b35}
+.orange{background:#fff0ce;color:#875300}
+.red{background:#fde5e3;color:#a52d27}
+.actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.notice{background:#fff4dc;padding:12px;border-radius:9px;font-size:14px;line-height:1.5;margin-bottom:12px}
+.muted{color:#64766c;font-size:13px;line-height:1.5}
+.empty{text-align:center;color:#64766c;padding:20px 0}
+footer{text-align:center;color:#75857c;font-size:12px;padding:15px}
+@media(max-width:420px){main{padding:12px}.stats{gap:6px}.stat{padding:10px}.stat strong{font-size:21px}.card{padding:14px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Contract Tracker</h1>
+  <p>Monitor client contracts and upcoming expirations</p>
+</header>
+<main>
+  <div class="card">
+    <h2>Dashboard</h2>
+    <div class="stats">
+      <div class="stat"><strong id="total">0</strong><span>Total clients</span></div>
+      <div class="stat"><strong id="soon">0</strong><span>Expiring in 60 days</span></div>
+      <div class="stat"><strong id="expired">0</strong><span>Expired</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 id="formTitle">Add a client contract</h2>
+    <form id="contractForm">
+      <label for="client">Client name</label>
+      <input id="client" required maxlength="120" placeholder="Enter client name">
+
+      <label for="start">Contract start date</label>
+      <input id="start" type="date" required>
+
+      <label for="end">Contract expiration date</label>
+      <input id="end" type="date" required>
+
+      <button class="primary" id="saveBtn" type="submit">Save contract</button>
+      <button class="secondary" id="cancelBtn" type="button" hidden>Cancel edit</button>
+    </form>
+    <p class="muted">Records are saved in this browser on this device. Export a backup regularly.</p>
+  </div>
+
+  <div class="card">
+    <h2>Reminders and client contracts</h2>
+    <div id="reminders"></div>
+    <div id="list"></div>
+    <div class="actions">
+      <button class="secondary" id="exportBtn">Export backup</button>
+      <button class="secondary" id="importBtn">Import backup</button>
+      <input id="backupFile" type="file" accept=".json,application/json" hidden>
+    </div>
+  </div>
+  <footer>Contract Expiration Tracker · Personal use</footer>
+</main>
+
+<script>
+const STORAGE_KEY = "contractTrackerRecordsV1";
+let records = [];
+let editingId = null;
+
+const $ = id => document.getElementById(id);
+
+function loadRecords() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    records = Array.isArray(saved) ? saved : [];
+  } catch {
+    records = [];
+  }
+}
+
+function saveRecords() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    return true;
+  } catch {
+    alert("Unable to save. Please export your backup and check browser storage.");
+    return false;
+  }
+}
+
+function dayNumber(dateString) {
+  const parts = dateString.split("-").map(Number);
+  return Math.floor(Date.UTC(parts[0], parts[1]-1, parts[2]) / 86400000);
+}
+
+function daysLeft(dateString) {
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return dayNumber(dateString) - Math.floor(today / 86400000);
+}
+
+function statusFor(days) {
+  if (days < 0) return ["EXPIRED", "red"];
+  if (days <= 60) return ["EXPIRING SOON", "orange"];
+  return ["ACTIVE", "green"];
+}
+
+function safeText(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;",
+    '"':"&quot;", "'":"&#39;"
+  })[char]);
+}
+
+function render() {
+  records.sort((a,b) => a.end.localeCompare(b.end));
+  const dated = records.map(r => ({...r, days:daysLeft(r.end)}));
+  $("total").textContent = records.length;
+  $("soon").textContent = dated.filter(r => r.days >= 0 && r.days <= 60).length;
+  $("expired").textContent = dated.filter(r => r.days < 0).length;
+
+  const upcoming = dated.filter(r => r.days >= 0 && r.days <= 60);
+  const old = dated.filter(r => r.days < 0);
+  let messages = [];
+  if (upcoming.length) messages.push(
+    `<div class="notice"><strong>Reminder:</strong> ${upcoming.length} contract(s) expire within 60 days.</div>`
+  );
+  if (old.length) messages.push(
+    `<div class="notice"><strong>Attention:</strong> ${old.length} contract(s) have expired.</div>`
+  );
+  if (!messages.length) messages.push(
+    `<p class="muted">No urgent reminders today.</p>`
+  );
+  $("reminders").innerHTML = messages.join("");
+
+  if (!dated.length) {
+    $("list").innerHTML = '<div class="empty">No contracts yet. Add your first client above.</div>';
+    return;
+  }
+
+  $("list").innerHTML = dated.map(r => {
+    const [status, color] = statusFor(r.days);
+    const remaining = r.days < 0
+      ? `${Math.abs(r.days)} day(s) overdue`
+      : r.days === 0 ? "Expires today" : `${r.days} day(s) remaining`;
+
+    return `<article class="contract">
+      <h3>${safeText(r.client)}</h3>
+      <span class="badge ${color}">${status}</span>
+      <div class="meta">
+        Start: ${safeText(r.start)}<br>
+        Expires: ${safeText(r.end)}<br>
+        <strong>${remaining}</strong>
+      </div>
+      <div class="actions">
+        <button class="secondary" data-edit="${safeText(r.id)}">Edit</button>
+        <button class="danger" data-delete="${safeText(r.id)}">Delete</button>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+$("contractForm").addEventListener("submit", event => {
+  event.preventDefault();
+  const client = $("client").value.trim();
+  const start = $("start").value;
+  const end = $("end").value;
+  if (!client || !start || !end) return;
+  if (end < start) {
+    alert("Expiration date cannot be earlier than the start date.");
+    return;
+  }
+
+  if (editingId) {
+    const record = records.find(r => r.id === editingId);
+    if (record) Object.assign(record, {client,start,end});
+  } else {
+    records.push({
+      id: Date.now().toString() + Math.random().toString(16).slice(2),
+      client,start,end
+    });
+  }
+
+  if (!saveRecords()) return;
+  resetForm();
+  render();
+});
+
+function resetForm() {
+  editingId = null;
+  $("contractForm").reset();
+  $("formTitle").textContent = "Add a client contract";
+  $("saveBtn").textContent = "Save contract";
+  $("cancelBtn").hidden = true;
+}
+
+$("cancelBtn").addEventListener("click", resetForm);
+
+$("list").addEventListener("click", event => {
+  const editId = event.target.dataset.edit;
+  const deleteId = event.target.dataset.delete;
+
+  if (editId) {
+    const r = records.find(item => item.id === editId);
+    if (!r) return;
+    editingId = r.id;
+    $("client").value = r.client;
+    $("start").value = r.start;
+    $("end").value = r.end;
+    $("formTitle").textContent = "Edit client contract";
+    $("saveBtn").textContent = "Save changes";
+    $("cancelBtn").hidden = false;
+    $("client").focus();
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+
+  if (deleteId) {
+    const r = records.find(item => item.id === deleteId);
+    if (r && confirm(`Delete the contract for ${r.client}?`)) {
+      records = records.filter(item => item.id !== deleteId);
+      if (saveRecords()) {
+        if (editingId === deleteId) resetForm();
+        render();
+      }
+    }
+  }
+});
+
+$("exportBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(records, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "contract-tracker-backup.json";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+$("importBtn").addEventListener("click", () => $("backupFile").click());
+
+$("backupFile").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data) || !data.every(r =>
+      r && typeof r.client === "string" &&
+      typeof r.start === "string" && typeof r.end === "string" &&
+      typeof r.id === "string" && r.end >= r.start
+    )) throw new Error("Invalid backup");
+    if (confirm("Replace all current records with the backup?")) {
+      records = data;
+      if (saveRecords()) render();
+    }
+  } catch {
+    alert("Backup file is invalid or cannot be read.");
+  }
+  event.target.value = "";
+});
+
+loadRecords();
+render();
+</script>
+</body>
+</html>
